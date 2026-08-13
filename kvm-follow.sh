@@ -18,7 +18,9 @@
 # https://github.com/rockowitz/ddcutil/wiki/Switching-input-source-on-LG-monitors
 #
 # Monitors that are NOT recent LGs usually honour plain VCP 0x60 — set DDC_CMD=input
-# in the config and everything else here works unchanged.
+# in the config and everything else here works unchanged. That path is untested: no
+# monitor speaking the standard register was available. Everything else here is
+# verified daily on an LG UltraWide 34WQ650 (2560x1080 @ 100 Hz, 2023).
 #
 # TRAP: the Homebrew release of m1ddc (1.2.0) has the `input-alt` command but it is
 # BROKEN — wrong checksum, and the high byte of the value is zeroed out. Since some

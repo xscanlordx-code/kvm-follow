@@ -13,7 +13,7 @@ Hardware this was built and verified on:
 
 | | |
 |---|---|
-| Monitor | LG UltraWide 2560×1080 (WQ family), no built-in KVM |
+| Monitor | **LG UltraWide 34WQ650** — 2560×1080 @ 100 Hz, 2023, no built-in KVM |
 | Host | Mac mini M4 Pro on HDMI, always on |
 | Peer | MacBook Pro M1 Pro on USB-C, lid closed |
 | Keyboard | MX Keys Mini — Bluetooth to the host, Bolt receiver to the peer |
@@ -22,6 +22,39 @@ Hardware this was built and verified on:
 Everything here is Apple-silicon-only, because it stands on
 [m1ddc](https://github.com/waydabber/m1ddc). See
 [Will this work on my setup?](#will-this-work-on-my-setup) before you start.
+
+## Status: one verified configuration, not a product
+
+Read this before you file an issue asking why it does not work on your desk.
+
+This is a write-up of a setup that works, published because the three findings behind
+it are documented nowhere obvious. It is **not** a tool that has been tested across
+hardware. Specifically:
+
+**Verified on the hardware above, in daily use:** the DDC sidechannel, the input codes
+144 and 465, the wake-before-switch sequence, the double-send, the Bluetooth detection,
+the ~7 second end-to-end timing.
+
+**Not verified, and you should assume it needs work:**
+
+- **The `DDC_CMD=input` path** (standard VCP `0x60`, for non-LG monitors). Logically
+  it is a one-word substitution and the code path is identical, but there was no
+  monitor at hand that speaks the standard register. Nobody has run it.
+- **`WAKE_HOLD` expiry.** The author's own machine runs an earlier variant with an
+  unbounded `caffeinate` hold; the 1800-second default here is the better default, but
+  it has not been left running for weeks.
+- **Every monitor that is not a 34WQ650.** Input codes differ per model — see below.
+- **Anything but this exact pair of Macs**, this keyboard, and these ports.
+
+Worth knowing: **the 34WQ650 appears in neither list on the
+[ddcutil wiki](https://github.com/rockowitz/ddcutil/wiki/Switching-input-source-on-LG-monitors)** —
+not among the confirmed models, not among the theoretically supported ones (the WQ
+entries there are 60C, 75C and 95C). The sidechannel works on it anyway. Which is the
+whole point: absence from the list means nothing, and presence in it does not tell you
+your codes.
+
+If you adapt this to other hardware, the codes and quirks you find are worth sending
+to that wiki rather than only here — it is the closest thing to a central registry.
 
 ## How fast is it, honestly
 
@@ -142,6 +175,29 @@ verifiable, and it does not poke a manufacturer's service channel.
 peer, and sending a duplicate switch command. If your second machine is a Windows or
 Linux box that stays awake, drop the SSH parts and let the Mac send both commands
 itself — the monitor does not care who tells it.
+
+### Repeating this on your hardware: the order of operations
+
+Do it in this order and you will know within twenty minutes whether it is possible at
+all, before installing anything:
+
+1. **`m1ddc display list`.** Nothing listed? DDC is not reaching the panel — wrong
+   port, a dock, or a hub in the way. Stop here, no software fixes that.
+2. **`m1ddc set luminance 50`.** Brightness changes? Then the channel works and the
+   monitor is talking to you. This is the cheap, harmless test — do it before touching
+   inputs.
+3. **`m1ddc set input 17`** (HDMI 1) or `27` (USB-C). If the input switches, you are
+   done with the hard part: set `DDC_CMD=input`, use standard codes, and skip the rest
+   of this section entirely.
+4. **Only if step 3 does nothing:** you are on a recent LG. Run
+   `./tools/probe-inputs.sh` for the documented sidechannel codes. Expect ~5 s per
+   switch — do not conclude a code failed until you have waited.
+5. **Codes found?** Then everything else here is plumbing: SSH keys, the config file,
+   `install.sh`. Codes not found? Your panel is probably not in this family, and
+   nothing in this repository will help.
+
+Test each direction from the *other* machine first, by hand, before wiring up the
+agent. A daemon that switches your display away is a bad place to discover a typo.
 
 ### Other platforms
 
