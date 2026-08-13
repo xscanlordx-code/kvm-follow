@@ -6,13 +6,27 @@
 # even when the device is connected.
 KEYBOARD="MX Keys Mini"
 
-# Input codes for `m1ddc set input-alt`. These are NOT the standard VCP 0x60 codes.
-# Values verified on an LG UltraWide (WQ family, 2560x1080):
-#   144 = 0x90   HDMI 1
-#   145 = 0x91   HDMI 2
-#   208 = 0xD0   DisplayPort 1
-#   465 = 0x1D1  USB-C   <- two-byte value, impossible with the broken Homebrew build
-# Other panels differ. Use tools/probe-inputs.sh to find yours.
+# Which m1ddc command switches the input:
+#   input-alt  LG service sidechannel (DDC2AB, source address 0x50) — recent LG panels
+#   input      standard VCP 0x60 — Dell, Samsung, BenQ, ASUS, older LG, most others
+# If your monitor is not a recent LG, try `input` FIRST: it is the documented path and
+# does not touch the manufacturer's service channel at all.
+DDC_CMD="input-alt"
+
+# Input codes. Note that they depend on DDC_CMD — the two registers use different
+# numbering, so a code from one table means nothing to the other.
+#
+# Standard VCP 0x60 (DDC_CMD=input):
+#   15 DisplayPort 1 | 16 DisplayPort 2 | 17 HDMI 1 | 18 HDMI 2 | 27 USB-C
+#
+# LG sidechannel (DDC_CMD=input-alt), per the ddcutil wiki:
+#   144 = 0x90  HDMI 1        | 145 = 0x91  HDMI 2
+#   208 = 0xD0  DisplayPort 1 | 209 = 0xD1  DisplayPort 2 | 210 = 0xD2  USB-C
+#
+# ...but these tables are not reliable across models. On the LG UltraWide this was
+# built on, USB-C answers to 465 = 0x1D1, not to the documented 210. That two-byte
+# value is also exactly what the broken Homebrew build of m1ddc cannot send.
+# Verify yours with tools/probe-inputs.sh.
 INPUT_HOST=144        # the machine running this script
 INPUT_PEER=465        # the other machine
 

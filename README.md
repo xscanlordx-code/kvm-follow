@@ -7,14 +7,7 @@ behind the desk.
 
 Two Macs share one monitor and one Logitech Easy-Switch keyboard. You press the
 Easy-Switch key to move the keyboard to the other machine — and the monitor follows
-it, by itself, in about a second. That is the whole feature.
-
-```
-2026-08-13 16:10:11 [leave]  monitor -> peer in 2s
-2026-08-13 16:10:24 [return] monitor -> host in 1s
-2026-08-13 16:10:49 [leave]  monitor -> peer in 1s
-2026-08-13 16:11:01 [return] monitor -> host in 1s
-```
+it, by itself. That is the whole feature.
 
 Hardware this was built and verified on:
 
@@ -27,7 +20,33 @@ Hardware this was built and verified on:
 | Mouse | MX Master 3S, same Easy-Switch pairing |
 
 Everything here is Apple-silicon-only, because it stands on
-[m1ddc](https://github.com/waydabber/m1ddc).
+[m1ddc](https://github.com/waydabber/m1ddc). See
+[Will this work on my setup?](#will-this-work-on-my-setup) before you start.
+
+## How fast is it, honestly
+
+**About 7 seconds** from pressing the Easy-Switch key to a picture on the other
+machine. The breakdown matters, because most of it is not something software can fix:
+
+| | |
+|---|---|
+| Bluetooth reports the keyboard is gone | ~1–2 s |
+| Script debounce, SSH, wake, DDC command | < 1 s |
+| **The panel physically changes input** | **~5 s** |
+
+That last row is the monitor's own firmware and it is the same 5 seconds you get from
+pressing the input button on the monitor itself. There is nothing to optimise there.
+
+The log only shows the software part, so it prints numbers like this:
+
+```
+2026-08-13 16:10:11 [leave]  monitor -> peer in 2s
+2026-08-13 16:10:24 [return] monitor -> host in 1s
+```
+
+Add ~5 s of panel time to each line for what you actually experience. For comparison,
+the first version of this — which switched inputs by cutting the video signal and
+letting the monitor auto-search — took 12–20 s end to end.
 
 ## The part that took the longest
 
@@ -40,15 +59,25 @@ string. Every one of them is accepted and does exactly nothing — the panel bli
 stays where it was. Reading `0x60` back always returns `0`, a firmware bug, so you
 cannot even tell which input is live.
 
-**2. The real register is proprietary: `0xF4`, sent to I2C address `0x50` instead of
-the usual `0x51`.** In m1ddc that is `set input-alt`. Verified codes on this panel:
+**2. The real register is `0xF4`, reached over LG's service sidechannel "DDC2AB".**
+The DDC packet is sent with source address `0x50` instead of the standard `0x51`. In
+m1ddc that is `set input-alt`; on Linux, ddcutil exposes the same thing as
+`--i2c-source-addr=x50`. The
+[ddcutil wiki page on LG input switching](https://github.com/rockowitz/ddcutil/wiki/Switching-input-source-on-LG-monitors)
+is the best documentation that exists for this, including a list of confirmed models.
 
-| Input | Code | Hex |
+Codes per that wiki — and what this panel actually does:
+
+| Input | Documented | This panel |
 |---|---|---|
-| HDMI 1 | 144 | `0x90` |
-| HDMI 2 | 145 | `0x91` |
-| DisplayPort 1 | 208 | `0xD0` |
-| USB-C | **465** | **`0x1D1`** |
+| HDMI 1 | 144 = `0x90` | 144 ✓ |
+| HDMI 2 | 145 = `0x91` | — |
+| DisplayPort 1 | 208 = `0xD0` | — |
+| DisplayPort 2 | 209 = `0xD1` | — |
+| USB-C | 210 = `0xD2` | **465 = `0x1D1`** |
+
+Do not trust the table, verify your own codes. See
+[finding your codes](#finding-your-own-input-codes).
 
 **3. The Homebrew build of m1ddc cannot send that USB-C code — at all.** Release
 1.2.0 has the `input-alt` command, but the implementation is broken: wrong checksum,
@@ -91,26 +120,42 @@ Three details that are not obvious but matter:
 - **Send every DDC command twice.** LG panels swallow the first one often enough to be
   annoying, and the second one costs 150 ms.
 
-## Requirements
+## Will this work on my setup?
 
-Both machines:
+Be honest with yourself about all five rows before spending an evening on this.
 
-- Apple silicon (m1ddc has no Intel support)
-- [m1ddc](https://github.com/waydabber/m1ddc) built from HEAD — see below
-- Homebrew
+| Layer | Requirement | If not |
+|---|---|---|
+| OS | macOS | Nothing here ports. See [other platforms](#other-platforms) |
+| CPU | Apple silicon | m1ddc has no Intel support — use [BetterDisplay](https://github.com/waydabber/BetterDisplay) (DDC is free there) |
+| Port | USB-C/DP Alt Mode, or a supported built-in HDMI | DDC frequently does not survive docks and hubs. Test with `m1ddc display list` first |
+| Monitor | Speaks DDC input switching | Set `DDC_CMD=input` for the standard register — see below. Monitors with a built-in KVM don't need any of this |
+| Keyboard | Bluetooth link that actually drops on channel switch | If both machines use receivers, there is nothing to detect and this design does not apply |
 
-Host only:
+**Non-LG monitors are the common case, and they are easier.** Dell, Samsung, BenQ,
+ASUS and older LGs generally honour the standard `0x60` register. Set `DDC_CMD=input`
+in the config, use the standard codes (17 = HDMI 1, 15 = DisplayPort 1, 27 = USB-C),
+and skip the entire sidechannel story. Try that path first — it is documented, it is
+verifiable, and it does not poke a manufacturer's service channel.
 
-- `blueutil` — `brew install blueutil`
-- SSH key access to the peer
+**The peer does not have to be a Mac.** SSH is used for exactly two things: waking the
+peer, and sending a duplicate switch command. If your second machine is a Windows or
+Linux box that stays awake, drop the SSH parts and let the Mac send both commands
+itself — the monitor does not care who tells it.
 
-Peer only:
+### Other platforms
 
-- Remote Login enabled (System Settings → General → Sharing → Remote Login)
+The *approach* travels even though this script does not:
 
-A Logitech Easy-Switch keyboard paired to the host over Bluetooth and to the peer
-however you like. Any keyboard whose Bluetooth connection actually drops when it
-switches channel will do.
+- **Linux** — ddcutil supports the LG sidechannel natively:
+  `ddcutil setvcp xF4 x0090 --i2c-source-addr=x50 --noverify`. `--noverify` is
+  required: the panel does not report back on this channel. Keyboard detection would
+  come from `bluetoothctl` or udev instead of blueutil.
+- **Windows** — the DDC APIs do not let you change the source address, so people go
+  around them through the GPU's raw I2C:
+  [lg-input-switch](https://github.com/meer-cha/lg-input-switch) via NVAPI for NVIDIA,
+  [LGInputSwitch](https://github.com/phillip9933/LGInputSwitch) for AMD.
+- **Intel Macs** — BetterDisplay, which does DDC on all Macs and all ports.
 
 ## Install
 
@@ -125,8 +170,7 @@ sudo cp m1ddc /opt/homebrew/bin/m1ddc
 
 If `make` fails with missing SDK headers, your Command Line Tools are too old
 (`xcode-select --install`). It is perfectly fine to build the binary on one machine
-and copy it to the other — it is a single static-ish executable and both machines are
-arm64.
+and copy it to the other — it is a single executable and both machines are arm64.
 
 Verify that the fixed `input-alt` is present:
 
@@ -134,7 +178,16 @@ Verify that the fixed `input-alt` is present:
 m1ddc set input-alt 465 && echo "if the monitor switched, you are done"
 ```
 
-### 2. SSH from host to peer
+### 2. blueutil on the host
+
+```sh
+brew install blueutil
+blueutil --paired          # copy the exact keyboard name from here
+```
+
+### 3. SSH from host to peer
+
+Enable Remote Login on the peer (System Settings → General → Sharing), then:
 
 ```sh
 ssh-keygen -t ed25519 -f ~/.ssh/kvm_peer -N ''
@@ -142,53 +195,64 @@ ssh-copy-id -i ~/.ssh/kvm_peer.pub youruser@peer.local
 ssh -i ~/.ssh/kvm_peer youruser@peer.local true && echo ok
 ```
 
-### 3. The agent, on the host
+### 4. The agent, on the host
 
 ```sh
 git clone https://github.com/xscanlordx-code/kvm-follow
 cd kvm-follow
 ./install.sh
-$EDITOR ~/.config/kvm-follow/config     # keyboard name, input codes, peer host
+$EDITOR ~/.config/kvm-follow/config     # keyboard name, DDC_CMD, input codes, peer host
 launchctl kickstart -k gui/$(id -u)/com.kvm.follow
 tail -f /tmp/kvm-follow.log
 ```
 
+`install.sh` is safe to re-run: it never overwrites an existing config and unloads the
+old agent before loading the new one.
+
 ### Finding your own input codes
 
-The codes above are for one LG UltraWide. If your panel is different:
-
 ```sh
-./tools/probe-inputs.sh          # cycles the common codes, 5 s apart
-./tools/probe-inputs.sh 144 465  # or specific ones
+./tools/probe-inputs.sh                  # LG sidechannel, documented codes only
+DDC_CMD=input ./tools/probe-inputs.sh    # standard VCP 0x60, for everything else
+./tools/probe-inputs.sh 144 465          # just these two
 ```
 
 Run it from the machine that will keep the picture, and remember that DDC is global —
 if you lose the screen, send the return code from the other machine.
 
+**Do not brute-force the sidechannel.** With `input-alt` these writes land on LG's
+factory service channel. The probe ships a short list of documented values on purpose.
+There is an unresolved report of an
+[LG panel going unresponsive](https://github.com/rockowitz/ddcutil/issues/419) after
+DDC experiments — that case involved plain `0x60`, but a manufacturer's service
+channel is not where you want to find out whether it generalises. If your monitor is
+not a recent LG, use `DDC_CMD=input` and stay on the documented register.
+
 ## Trade-off you should know about
 
 Waking the peer takes about 1.5 s, so the script does not release its `caffeinate`
-hold when you switch away — the peer stays awake and the next switch is instant. The
-price is that the peer never sleeps on its own while the agent is running.
+hold when you switch away — the peer stays awake and the next switch skips that step.
+The price is that the peer never sleeps on its own while the agent is running.
 
 `WAKE_HOLD` bounds this: the default of 1800 s means the hold expires half an hour
 after the last switch, so a laptop you carry off the desk will sleep normally. Set
 `WAKE_HOLD=0` for a hold that never expires (fastest, but the peer stays awake until
 it reboots).
 
-Note that this affects display sleep and idle system sleep only. A laptop set to sleep
-on lid close still sleeps on lid close.
+This affects display sleep and idle system sleep only. A laptop set to sleep on lid
+close still sleeps on lid close.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
 | Nothing happens, exit code 0 | Release build of m1ddc. Check `input-alt` against a two-byte code. |
-| Monitor blinks but stays put | You are sending `set input`, not `set input-alt`. |
+| Monitor blinks but stays put | You are sending `set input` to a panel that needs `input-alt`, or the reverse. |
 | Black screen after switching to the peer | Peer was asleep and SSH failed — check `/tmp/kvm-follow.log`. |
 | Switch happens twice, or bounces | Raise `SETTLE`; the Bluetooth stack is flapping. |
 | `blueutil --is-connected` always 0 | You passed a MAC address. Use the device name. |
 | Works one way only | The host's DDC channel went deaf; that is exactly why the return path also fires from the peer. |
+| `m1ddc display list` shows nothing | DDC is not reaching the monitor — dock, hub, or unsupported port. |
 | Agent dies at boot | `blueutil`/`m1ddc` path wrong in the config, see `/tmp/kvm-follow.err`. |
 
 ## Dead ends, so you don't repeat them
@@ -196,22 +260,23 @@ on lid close still sleeps on lid close.
 - **Switching by killing the video signal** (`pmset displaysleepnow` + letting the
   monitor auto-search for a live input). This *works*, and it was the first version
   here, but it takes 12–20 s per switch and produces HPD races where macOS rearranges
-  windows. The DDC path is 10× faster and does not touch the video link at all.
+  windows. The DDC path is faster and does not touch the video link at all.
 - **LG OnScreen Control / LG Dual Controller** — no input switching. Dual Controller
   moves the *pointer* between machines over the network, which is a different feature.
 - **MonitorControl** — brightness and volume only, input switching is not implemented.
 - **ddcctl** — Intel-only.
-- **The monitor's own KVM** — this panel does not have one. Panels that do have one
-  usually expose it at `0xE7`/`0xE8` and m1ddc has Dell/ASUS-specific commands for it.
+- **The monitor's own KVM** — this panel does not have one. Panels that do usually
+  expose it at `0xE7`/`0xE8`, and m1ddc has Dell/ASUS-specific commands for it.
 - **Detecting the keyboard on the laptop side** — impossible through a Bolt receiver,
   see above.
 
 ## Credits
 
-All the hard DDC work belongs to [waydabber/m1ddc](https://github.com/waydabber/m1ddc)
-and to whoever reverse-engineered the `0xF4`-at-`0x50` register for LG panels. This
-repository is a hundred lines of shell on top of that, plus the specific codes and
-failure modes for one very common monitor family.
+All the hard DDC work belongs to [waydabber/m1ddc](https://github.com/waydabber/m1ddc),
+and the LG sidechannel was reverse-engineered by the
+[ddcutil](https://github.com/rockowitz/ddcutil) community. This repository is a
+hundred lines of shell on top of that, plus the specific codes, timings and failure
+modes for one very common monitor family.
 
 ## License
 

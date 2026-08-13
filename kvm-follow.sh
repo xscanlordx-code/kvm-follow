@@ -12,8 +12,13 @@
 # Recent LG monitors ignore the standard DDC/CI input register VCP 0x60. Every code
 # advertised in the monitor's own capability string is accepted and does nothing but
 # make the panel blink. Input is instead controlled by a proprietary register, 0xF4,
-# sent to I2C address 0x50 instead of the usual 0x51 — that is what m1ddc calls
-# `set input-alt`.
+# sent over LG's service sidechannel "DDC2AB" — the DDC packet carries source address
+# 0x50 instead of the standard 0x51. That is what m1ddc calls `set input-alt`, and
+# what ddcutil exposes on Linux as `--i2c-source-addr=x50`. See:
+# https://github.com/rockowitz/ddcutil/wiki/Switching-input-source-on-LG-monitors
+#
+# Monitors that are NOT recent LGs usually honour plain VCP 0x60 — set DDC_CMD=input
+# in the config and everything else here works unchanged.
 #
 # TRAP: the Homebrew release of m1ddc (1.2.0) has the `input-alt` command but it is
 # BROKEN — wrong checksum, and the high byte of the value is zeroed out. Since some
@@ -43,6 +48,7 @@ CONFIG="${KVM_FOLLOW_CONFIG:-$HOME/.config/kvm-follow/config}"
 # ---- settings (override in the config file, see kvm-follow.conf.example) ----
 
 : "${KEYBOARD:=MX Keys Mini}"      # exact Bluetooth name, see: blueutil --paired
+: "${DDC_CMD:=input-alt}"          # input-alt = LG sidechannel, input = standard VCP 0x60
 : "${INPUT_HOST:=144}"             # input code for this machine   (144 = 0x90,  HDMI 1)
 : "${INPUT_PEER:=465}"             # input code for the other one  (465 = 0x1D1, USB-C)
 
@@ -103,15 +109,19 @@ peer_wake() {
 }
 
 # LG panels occasionally swallow the first command — send it twice.
-ddc_local()  { "$DDC" set input-alt "$1" >/dev/null 2>&1; sleep 0.15
-               "$DDC" set input-alt "$1" >/dev/null 2>&1; }
-ddc_peer()   { peer_ssh "$PEER_DDC set input-alt $1"; }
+ddc_local()  { "$DDC" set "$DDC_CMD" "$1" >/dev/null 2>&1; sleep 0.15
+               "$DDC" set "$DDC_CMD" "$1" >/dev/null 2>&1; }
+ddc_peer()   { peer_ssh "$PEER_DDC set $DDC_CMD $1"; }
 
 probe() { "$BLUEUTIL" --is-connected "$KEYBOARD" 2>/dev/null; }
 
 for bin in "$DDC" "$BLUEUTIL"; do
   [ -x "$bin" ] || { log "FATAL: $bin not found or not executable"; exit 1; }
 done
+case "$DDC_CMD" in
+  input|input-alt) ;;
+  *) log "FATAL: DDC_CMD must be 'input' or 'input-alt', got '$DDC_CMD'"; exit 1 ;;
+esac
 
 peer_ssh 'true' && log "ssh master up: $PEER_ACTIVE" || log "peer unreachable"
 
