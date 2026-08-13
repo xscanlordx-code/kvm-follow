@@ -1,0 +1,41 @@
+# kvm-follow configuration — copy to ~/.config/kvm-follow/config and edit.
+# Plain shell, sourced by the script. Every value below is a default you may drop.
+
+# Exact Bluetooth name of the keyboard, as printed by:  blueutil --paired
+# Must be matched by NAME. blueutil --is-connected with a MAC address returns 0
+# even when the device is connected.
+KEYBOARD="MX Keys Mini"
+
+# Input codes for `m1ddc set input-alt`. These are NOT the standard VCP 0x60 codes.
+# Values verified on an LG UltraWide (WQ family, 2560x1080):
+#   144 = 0x90   HDMI 1
+#   145 = 0x91   HDMI 2
+#   208 = 0xD0   DisplayPort 1
+#   465 = 0x1D1  USB-C   <- two-byte value, impossible with the broken Homebrew build
+# Other panels differ. Use tools/probe-inputs.sh to find yours.
+INPUT_HOST=144        # the machine running this script
+INPUT_PEER=465        # the other machine
+
+# The other machine. Hosts are tried in order; the first one that answers is cached
+# for the session, so put the mDNS name first and a static IP as a fallback.
+PEER_USER="youruser"
+PEER_HOSTS="peer.local 192.168.0.10"
+SSH_KEY="$HOME/.ssh/kvm_peer"
+
+# m1ddc must be a HEAD build on BOTH machines — see README.
+DDC="/opt/homebrew/bin/m1ddc"
+PEER_DDC="/opt/homebrew/bin/m1ddc"
+BLUEUTIL="/opt/homebrew/bin/blueutil"
+
+# Timing. POLL is cheap (blueutil call, no I/O), SETTLE is the debounce window:
+# Bluetooth reports a disconnect-reconnect flap when Easy-Switch changes channel.
+POLL=0.3
+SETTLE=0.3
+
+# How long to keep the peer's display awake after switching to it, in seconds.
+# The hold is deliberately not released on switch-back — an awake peer switches ~1.5 s
+# faster. 0 means "hold forever", which also means the peer will never sleep again
+# until it reboots. 1800 is a sane bound if the peer is a laptop you carry away.
+WAKE_HOLD=1800
+
+LOG="/tmp/kvm-follow.log"
