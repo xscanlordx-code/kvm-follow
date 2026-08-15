@@ -1,0 +1,123 @@
+#!/bin/bash
+# kvm-follow — монитор следует за клавиатурой MX Keys Mini.
+#
+# ПОЧЕМУ ТАК. DDC-команды смены входа этот LG игнорирует (проверено перебором кодов),
+# зато у него работает автопоиск источника: теряя сигнал на текущем входе, он сам
+# переходит на другой активный. Значит рычаг один — снять сигнал с той машины,
+# с которой уходим. Снимаем через display sleep: окна не схлопываются.
+#
+# ПРОГРЕВ. Гасить машину НАДОЛГО нельзя: с погашенным экраном macOS придушивает
+# Bluetooth (реконнект клавиатуры 12-14 с вместо 3-5), а HDMI-линк потом поднимается
+# с нуля. Поэтому через MONITOR_SETTLE секунд после переключения покинутую машину
+# будим обратно. Монитор её не покажет — он переключается только при ПОТЕРЕ текущего
+# сигнала, а он есть. Зато обе стороны всегда наготове, и гасить можно без пауз.
+#
+# Клавиатура на макбуке приходит через Bolt, а не Bluetooth. Детектировать её там
+# нечем: ресивер держит 3 HID-интерфейса постоянно, hidutil/ioreg не меняются
+# (проверено). Поэтому судит только Mac mini по своему BT — второй сторож не нужен.
+# blueutil опережает ioreg на ~2 с, он и остаётся датчиком.
+
+KB="MX Keys Mini"                      # по ИМЕНИ: у BLE-устройств адрес может смениться,
+                                       # и детект по адресу молча ослепнет
+MB_USER="semenmoshkin"
+MB_HOSTS=("MacBook-Pro-2.local" "192.168.0.118")
+SSH_KEY="/Users/semenmoshkin/.ssh/kvm_macbook"
+
+POLL=0.3                               # период опроса
+SETTLE=0.5                             # подтверждение против дребезга BT
+WAKE_FWD=2                             # запас на пробуждение макбука перед гашением
+MONITOR_SETTLE=8                       # ждём, пока монитор перепрыгнет, и греем покинутую
+KEEPALIVE=900                          # как часто будить дисплей макбука (у него
+                                       # displaysleep=30мин; погаснет — монитор уедет
+                                       # на прогретый Mac mini сам собой)
+
+BLUEUTIL=/opt/homebrew/bin/blueutil
+LOG=/tmp/kvm-follow.log
+
+log() { echo "$(date '+%F %T') $*" >>"$LOG"; }
+
+SSH_OPTS=(-i "$SSH_KEY" -o ConnectTimeout=5 -o BatchMode=yes
+          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+          -o ControlMaster=auto -o ControlPath=/tmp/kvm-ssh-%h -o ControlPersist=900)
+
+MB_ACTIVE=""
+
+mb_ssh() {
+  local h
+  for h in "${MB_ACTIVE}" "${MB_HOSTS[@]}"; do
+    [ -z "$h" ] && continue
+    if ssh "${SSH_OPTS[@]}" "$MB_USER@$h" "$1" >/dev/null 2>&1; then
+      MB_ACTIVE="$h"; return 0
+    fi
+  done
+  MB_ACTIVE=""; return 1
+}
+
+# Пробуждение: -t 5 — короче не будит дисплей вообще (проверено на -t 1), длиннее
+# незачем. Удержание не мешает последующему гашению, потому что перед ним идёт pkill;
+# без pkill дисплей просыпался обратно и монитор возвращался на макбук.
+mb_warm()   { mb_ssh 'nohup caffeinate -u -t 5 >/dev/null 2>&1 &'; }
+self_warm() { caffeinate -u -t 5 >/dev/null 2>&1 & }
+
+# Перед гашением снимаем чужие удержания, иначе экран не погаснет
+mb_dark()   { mb_ssh 'pkill -f "caffeinate -u" >/dev/null 2>&1; pmset displaysleepnow'; }
+self_dark() { pkill -f "caffeinate -u" >/dev/null 2>&1; pmset displaysleepnow; }
+
+probe() { "$BLUEUTIL" --is-connected "$KB" 2>/dev/null; }
+
+mb_ssh 'true' && log "SSH-мастер поднят: $MB_ACTIVE" || log "макбук недоступен"
+mb_warm
+
+state=$(probe)
+case "$state" in 0|1) ;; *) state=1 ;; esac
+log "старт, состояние=$state"
+
+warm_at=0; warm_who=""; keep_at=$(( $(date +%s) + KEEPALIVE ))
+
+while true; do
+  sleep "$POLL"
+  now_ts=$(date +%s)
+
+  # отложенный прогрев покинутой машины — после того, как монитор уже переключился
+  if [ "$warm_at" -ne 0 ] && [ "$now_ts" -ge "$warm_at" ]; then
+    case "$warm_who" in
+      self) self_warm; log "прогрел Mac mini (BT в полную силу, HDMI наготове)" ;;
+      mb)   mb_warm;   log "прогрел макбук (USB-C наготове)" ;;
+    esac
+    warm_at=0; warm_who=""
+  fi
+
+  # не даём дисплею макбука уснуть по таймеру
+  if [ "$now_ts" -ge "$keep_at" ]; then
+    mb_warm; keep_at=$(( now_ts + KEEPALIVE ))
+  fi
+
+  now=$(probe)
+  case "$now" in 0|1) ;; *) continue ;; esac
+  [ "$now" = "$state" ] && continue
+
+  t0=$(date +%s)
+  sleep "$SETTLE"
+  confirm=$(probe)
+  [ "$confirm" != "$now" ] && { log "дребезг ($state->$now->$confirm), игнор"; continue; }
+  state=$now
+
+  if [ "$now" = "0" ]; then
+    if mb_warm; then
+      sleep "$WAKE_FWD"
+      self_dark
+      log "[уход] погасил HDMI за $(( $(date +%s) - t0 ))с — монитор уходит на USB-C"
+      warm_who="self"; warm_at=$(( $(date +%s) + MONITOR_SETTLE ))
+    else
+      log "[уход] макбук не отвечает по SSH — монитор НЕ трогаю"
+    fi
+  else
+    # Mac mini прогрет, ждать его пробуждения не нужно — гасим макбук сразу
+    if mb_dark; then
+      log "[возврат] погасил USB-C за $(( $(date +%s) - t0 ))с — монитор уходит на HDMI"
+      warm_who="mb"; warm_at=$(( $(date +%s) + MONITOR_SETTLE ))
+    else
+      log "[возврат] макбук не отвечает (вероятно спит) — монитор придёт сам"
+    fi
+  fi
+done
