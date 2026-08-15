@@ -1,5 +1,12 @@
 # kvm-follow
 
+> **⚠️ Current version lives in [`v3/`](v3/)** (2026-08-15): a two-agent design
+> (mini + a MacBook-side agent speaking HID++ to the Bolt receiver), the mouse
+> follows the keyboard both ways, and the MacBook naps in DarkWake instead of
+> being held awake forever. The script below is v1/v2 — it works, but tells only
+> half the story. The full map of rakes stepped on: [`v3/JOURNAL.md`](v3/JOURNAL.md) (Russian).
+
+
 Your monitor's input follows your keyboard. No KVM box, no USB switch, no reaching
 behind the desk.
 

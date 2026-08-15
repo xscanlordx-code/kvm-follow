@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>local.kvm.mousebin</string>
+    <key>CFBundleName</key><string>kvmmouse</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Переключение мыши MX Master между Mac mini и MacBook (KVM-схема).</string>
+</dict>
+</plist>
